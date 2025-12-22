@@ -1,0 +1,72 @@
+import express from 'express';
+import { db } from './db/client.js';
+import { DbEvaluationContext } from './context.js';
+import { evaluateRule } from './engine.js';
+import type { Rule } from './types.js';
+
+const app = express();
+app.use(express.json());
+
+const context = new DbEvaluationContext();
+
+// Seed data on startup
+import './db/seed.js';
+
+// Create a rule for an office
+app.post('/api/rules', (req, res) => {
+  const rule: Rule = req.body;
+
+  const id = db.ruleIdCounter++;
+  db.rules.set(id, {
+    id,
+    office_id: rule.office_id,
+    criteria: JSON.stringify(rule.criteria, null, 4),
+  });
+
+  res.json({ id, ...rule });
+});
+
+// Get rules for an office
+app.get('/api/rules/:officeId', (req, res) => {
+  const officeId = parseInt(req.params.officeId);
+  const rules = Array.from(db.rules.values())
+    .filter((r) => r.office_id === officeId)
+    .map((r) => ({
+      id: r.id,
+      office_id: r.office_id,
+      criteria: JSON.parse(r.criteria),
+    }));
+
+  res.json(rules);
+});
+
+// Check if office should be listed
+app.get('/api/offices/:id/listed', async (req, res) => {
+  const officeId = parseInt(req.params.id);
+
+  const rules = Array.from(db.rules.values())
+    .filter((r) => r.office_id === officeId)
+    .map((r) => ({
+      id: r.id,
+      office_id: r.office_id,
+      criteria: JSON.parse(r.criteria),
+    }));
+
+  if (rules.length === 0) {
+    return res.json({ listed: false, reason: 'No rules defined' });
+  }
+
+  for (const rule of rules) {
+    const passes = await evaluateRule(rule, context);
+    if (passes) {
+      return res.json({ listed: true, rule_id: rule.id });
+    }
+  }
+
+  res.json({ listed: false, reason: 'No rules passed' });
+});
+
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
