@@ -9,6 +9,9 @@ app.use(express.json());
 
 const context = new DbEvaluationContext();
 
+// Fast lookup: officeId -> Rule[]
+const officeRulesMap: Map<number, any[]> = new Map();
+
 // Seed data on startup
 import './db/seed.js';
 
@@ -17,11 +20,20 @@ app.post('/api/rules', (req, res) => {
   const rule: Rule = req.body;
 
   const id = db.ruleIdCounter++;
-  db.rules.set(id, {
+  const dbRule = {
     id,
     office_id: rule.office_id,
     criteria: JSON.stringify(rule.criteria, null, 4),
-  });
+  };
+  db.rules.set(id, dbRule);
+
+  // Update officeRulesMap
+  const ruleObj = { id, office_id: rule.office_id, criteria: rule.criteria };
+  if (!officeRulesMap.has(rule.office_id)) {
+    officeRulesMap.set(rule.office_id, [ruleObj]);
+  } else {
+    officeRulesMap.get(rule.office_id)!.push(ruleObj);
+  }
 
   res.json({ id, ...rule });
 });
@@ -29,30 +41,43 @@ app.post('/api/rules', (req, res) => {
 // Get rules for an office
 app.get('/api/rules/:officeId', (req, res) => {
   const officeId = parseInt(req.params.officeId);
-  const rules = Array.from(db.rules.values())
-    .filter((r) => r.office_id === officeId)
-    .map((r) => ({
-      id: r.id,
-      office_id: r.office_id,
-      criteria: JSON.parse(r.criteria),
-    }));
-
-  res.json(rules);
+  let rules = officeRulesMap.get(officeId);
+  if (!rules) {
+    // fallback for legacy or direct db.rules manipulation
+    rules = Array.from(db.rules.values())
+      .filter((r) => r.office_id === officeId)
+      .map((r) => ({
+        id: r.id,
+        office_id: r.office_id,
+        criteria: JSON.parse(r.criteria),
+      }));
+    if (rules.length > 0) {
+      officeRulesMap.set(officeId, rules);
+    }
+  }
+  res.json(rules || []);
 });
 
 // Check if office should be listed
 app.get('/api/offices/:id/listed', async (req, res) => {
   const officeId = parseInt(req.params.id);
 
-  const rules = Array.from(db.rules.values())
-    .filter((r) => r.office_id === officeId)
-    .map((r) => ({
-      id: r.id,
-      office_id: r.office_id,
-      criteria: JSON.parse(r.criteria),
-    }));
+  let rules = officeRulesMap.get(officeId);
+  if (!rules) {
+    // fallback for legacy or direct db.rules manipulation
+    rules = Array.from(db.rules.values())
+      .filter((r) => r.office_id === officeId)
+      .map((r) => ({
+        id: r.id,
+        office_id: r.office_id,
+        criteria: JSON.parse(r.criteria),
+      }));
+    if (rules.length > 0) {
+      officeRulesMap.set(officeId, rules);
+    }
+  }
 
-  if (rules.length === 0) {
+  if (!rules || rules.length === 0) {
     return res.json({ listed: false, reason: 'No rules defined' });
   }
 
